@@ -38,10 +38,18 @@ def scan_username(alvo):
 
 
 def scan_dominio(alvo):
+    import requests as rq
+    try:
+        r = rq.get(f'https://crt.sh/?q=%25.{alvo}&output=json', timeout=30)
+        nomes = sorted({e.get('name_value', '') for e in r.json() if isinstance(e, dict)} or {'(nenhum)'})
+        crt = '\n'.join(f'  - {n}' for n in list(nomes)[:60])
+    except Exception as e:
+        crt = f'(crt.sh indisponível: {e})'
     return (
-        '== Domínio (DNS/certificados públicos) ==\n'
-        f'subfinder:\n{cmd(["subfinder", "-silent", "-d", alvo])}\n'
-        f'theHarvester:\n{cmd(["theHarvester", "-d", alvo, "-b", "crtsh"], timeout=180)}\n'
+        '== Domínio (certificados públicos crt.sh) ==\n'
+        f'{crt}\n'
+        f'subfinder (se instalado):\n{cmd(["subfinder", "-silent", "-d", alvo])}\n'
+        f'theHarvester (se instalado):\n{cmd(["theHarvester", "-d", alvo, "-b", "crtsh"], timeout=180)}\n'
     )
 
 
