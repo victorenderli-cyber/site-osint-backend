@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: site-osint-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: ABACATEPAY_API_KEY
+        sync: false
+      - key: ABACATEPAY_WEBHOOK_SECRET
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: REPORT_FROM
+        sync: false
+      - key: MP_ACCESS_TOKEN
+        sync: false
