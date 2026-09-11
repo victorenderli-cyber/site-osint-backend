@@ -70,9 +70,12 @@ def validar_alvo(tipo, alvo):
     return False
 
 
+ABACATEPAY_PRODUCT_ID = os.environ.get('ABACATEPAY_PRODUCT_ID', '')
+
+
 @app.post('/api/criar-pix')
 def criar_pix():
-    """Cria cobrança Pix de R$ 49,90 com metadata (email/tipo/alvo)."""
+    """Cria checkout Pix de R$ 49,90 com metadata (email/tipo/alvo)."""
     dados = request.get_json(force=True, silent=True) or {}
     email = (dados.get('email') or '').strip()
     tipo = (dados.get('tipo') or '').strip()
@@ -81,26 +84,20 @@ def criar_pix():
         return jsonify(ok=False, erro='E-mail inválido'), 400
     if not validar_alvo(tipo, alvo):
         return jsonify(ok=False, erro='Alvo inválido para o tipo'), 400
-    if not ABACATEPAY_API_KEY:
+    if not (ABACATEPAY_API_KEY and ABACATEPAY_PRODUCT_ID):
         return jsonify(ok=False, erro='Pix automático não configurado'), 503
     r = requests.post(
-        f'{ABACATEPAY_BASE}/transparents/create',
+        f'{ABACATEPAY_BASE}/checkouts/create',
         headers={'Authorization': f'Bearer {ABACATEPAY_API_KEY}'},
-        json={'data': {
-            'amount': PRECO_CONSULTA_CENTAVOS,
-            'description': f'Consulta OSINT única — {tipo}: {alvo}',
-            'expiresIn': 3600,
-            'customer': {'email': email},
-            'metadata': {'email': email, 'tipo': tipo, 'alvo': alvo},
-        }},
+        json={'items': [{'id': ABACATEPAY_PRODUCT_ID, 'quantity': 1}],
+              'methods': ['PIX'],
+              'metadata': {'email': email, 'tipo': tipo, 'alvo': alvo}},
         timeout=20,
     )
     if r.status_code != 200:
         return jsonify(ok=False, erro='Falha ao gerar Pix'), 502
     data = (r.json().get('data') or {})
-    return jsonify(ok=True, id=data.get('id'),
-                   brCode=data.get('brCode'),
-                   brCodeBase64=data.get('brCodeBase64'))
+    return jsonify(ok=True, id=data.get('id'), url=data.get('url'))
 
 
 @app.post('/webhook/abacatepay')
@@ -115,7 +112,7 @@ def webhook_abacatepay():
         if not hmac.compare_digest(assinatura, esperado):
             return jsonify(ok=False), 401
     evento = request.get_json(force=True, silent=True) or {}
-    if evento.get('event') != 'transparent.completed':
+    if evento.get('event') not in ('checkout.completed', 'transparent.completed'):
         return jsonify(ok=True, ignorado=True)
     data = evento.get('data') or {}
     meta = data.get('metadata') or {}
