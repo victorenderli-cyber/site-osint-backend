@@ -124,7 +124,8 @@ def webhook_abacatepay():
         capture_output=True, text=True, timeout=600,
     )
     if proc.returncode != 0:
-        return jsonify(ok=False, erro='Falha ao gerar relatório'), 500
+        return jsonify(ok=False, erro='Falha ao gerar relatório',
+                       log=(proc.stderr or '')[-800:]), 500
     return jsonify(ok=True)
 
 
