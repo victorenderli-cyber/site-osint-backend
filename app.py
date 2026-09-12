@@ -16,6 +16,7 @@ Deploy grátis sugerido: Render.com (Web Service, plano free) com as envs do .en
 import base64
 import hashlib
 import hmac
+import json
 import os
 import re
 import subprocess
@@ -26,6 +27,9 @@ import requests
 app = Flask(__name__)
 
 MP_ACCESS_TOKEN = os.environ.get('MP_ACCESS_TOKEN', '')
+HOTMART_HOTTOK = os.environ.get('HOTMART_HOTTOK', '')
+HOTMART_CHECKOUT_URL = os.environ.get('HOTMART_CHECKOUT_URL', '')
+PENDING_FILE = os.environ.get('PENDING_FILE', '/tmp/osint_pending.json')
 REPORT_FROM = os.environ.get('REPORT_FROM', '')
 ABACATEPAY_API_KEY = os.environ.get('ABACATEPAY_API_KEY', '')
 ABACATEPAY_WEBHOOK_SECRET = os.environ.get('ABACATEPAY_WEBHOOK_SECRET', '')
@@ -57,7 +61,74 @@ def verificar_pagamento_mp(payment_id):
 @app.get('/api/status')
 def status():
     return jsonify(ok=True, mp_configurado=bool(MP_ACCESS_TOKEN),
-                   abacatepay_configurado=bool(ABACATEPAY_API_KEY))
+                   abacatepay_configurado=bool(ABACATEPAY_API_KEY),
+                   hotmart_configurado=bool(HOTMART_HOTTOK and HOTMART_CHECKOUT_URL))
+
+
+def _load_pending():
+    try:
+        with open(PENDING_FILE, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_pending(d):
+    try:
+        with open(PENDING_FILE, 'w', encoding='utf-8') as f:
+            json.dump(d, f)
+    except Exception:
+        pass
+
+
+@app.post('/api/iniciar')
+def iniciar():
+    """Registra pedido pendente e devolve o checkout Hotmart com e-mail pré-preenchido."""
+    import urllib.parse
+    dados = request.get_json(force=True, silent=True) or {}
+    email = (dados.get('email') or '').strip().lower()
+    tipo = (dados.get('tipo') or '').strip()
+    alvo = (dados.get('alvo') or '').strip()
+    if not EMAIL_RE.match(email):
+        return jsonify(ok=False, erro='E-mail inválido'), 400
+    if not validar_alvo(tipo, alvo):
+        return jsonify(ok=False, erro='Alvo inválido para o tipo'), 400
+    if not HOTMART_CHECKOUT_URL:
+        return jsonify(ok=False, erro='Checkout não configurado'), 503
+    pend = _load_pending()
+    pend[email] = {'tipo': tipo, 'alvo': alvo}
+    _save_pending(pend)
+    sep = '&' if '?' in HOTMART_CHECKOUT_URL else '?'
+    url = f'{HOTMART_CHECKOUT_URL}{sep}email={urllib.parse.quote(email)}'
+    return jsonify(ok=True, url=url)
+
+
+@app.post('/webhook/hotmart')
+def webhook_hotmart():
+    """Hotmart: valida hottok, cruza e-mail com pedido pendente e dispara scan + e-mail."""
+    if HOTMART_HOTTOK and request.args.get('hottok') != HOTMART_HOTTOK:
+        return jsonify(ok=False), 401
+    evento = request.get_json(force=True, silent=True) or request.form.to_dict() or {}
+    nome_evento = str(evento.get('event', '')).upper()
+    if 'APPROVED' not in nome_evento and 'COMPLETE' not in nome_evento and 'PAID' not in nome_evento:
+        return jsonify(ok=True, ignorado=True)
+    data = evento.get('data') or {}
+    comprador = data.get('buyer') or {}
+    email = str(comprador.get('email', '')).strip().lower()
+    pend = _load_pending()
+    pedido = pend.pop(email, None)
+    _save_pending(pend)
+    if not pedido:
+        return jsonify(ok=False, erro='pedido não encontrado para este e-mail'), 400
+    proc = subprocess.run(
+        ['python', 'run_scan.py', pedido['tipo'], pedido['alvo'], email,
+         str((data.get('purchase') or {}).get('transaction', 'hotmart'))],
+        capture_output=True, text=True, timeout=600,
+    )
+    if proc.returncode != 0:
+        return jsonify(ok=False, erro='Falha ao gerar relatório',
+                       log=(proc.stderr or '')[-800:]), 500
+    return jsonify(ok=True)
 
 
 def validar_alvo(tipo, alvo):
