@@ -27,6 +27,8 @@ MP_ACCESS_TOKEN = os.environ.get('MP_ACCESS_TOKEN', '')
 HOTMART_HOTTOK = os.environ.get('HOTMART_HOTTOK', '')
 HOTMART_CHECKOUT_URL = os.environ.get('HOTMART_CHECKOUT_URL', '')
 PENDING_FILE = os.environ.get('PENDING_FILE', '/tmp/osint_pending.json')
+SITE_URL = os.environ.get('SITE_URL', 'https://victorenderli-cyber.github.io/site-osint/')
+CODES_FILE = os.environ.get('CODES_FILE', '/tmp/osint_codes.json')
 REPORT_FROM = os.environ.get('REPORT_FROM', '')
 
 EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
@@ -73,6 +75,55 @@ def _save_pending(d):
         pass
 
 
+def _load_codes():
+    try:
+        with open(CODES_FILE, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_codes(d):
+    try:
+        with open(CODES_FILE, 'w', encoding='utf-8') as f:
+            json.dump(d, f)
+    except Exception:
+        pass
+
+
+def _rodar_scan_async(tipo, alvo, email, ref):
+    import threading
+
+    def _job():
+        subprocess.run(['python', 'run_scan.py', tipo, alvo, email, ref],
+                       capture_output=True, text=True, timeout=600)
+    threading.Thread(target=_job, daemon=True).start()
+
+
+@app.post('/api/resgatar')
+def resgatar():
+    """Troca código único (recebido por e-mail após a compra) por um scan."""
+    dados = request.get_json(force=True, silent=True) or {}
+    email = (dados.get('email') or '').strip().lower()
+    codigo = (dados.get('codigo') or '').strip()
+    tipo = (dados.get('tipo') or '').strip()
+    alvo = (dados.get('alvo') or '').strip()
+    if not EMAIL_RE.match(email):
+        return jsonify(ok=False, erro='E-mail inválido'), 400
+    if not validar_alvo(tipo, alvo):
+        return jsonify(ok=False, erro='Alvo inválido para o tipo'), 400
+    codes = _load_codes()
+    reg = codes.get(codigo)
+    if not reg or reg.get('email') != email:
+        return jsonify(ok=False, erro='Código inválido para este e-mail'), 400
+    if reg.get('usado'):
+        return jsonify(ok=False, erro='Código já utilizado'), 400
+    reg['usado'] = True
+    _save_codes(codes)
+    _rodar_scan_async(tipo, alvo, email, reg.get('ref', 'hotmart'))
+    return jsonify(ok=True, msg='Código válido! O relatório chega por e-mail em instantes.')
+
+
 @app.post('/api/iniciar')
 def iniciar():
     """Registra pedido pendente e devolve o checkout Hotmart com e-mail pré-preenchido."""
@@ -107,19 +158,23 @@ def webhook_hotmart():
     data = evento.get('data') or {}
     comprador = data.get('buyer') or {}
     email = str(comprador.get('email', '')).strip().lower()
-    pend = _load_pending()
-    pedido = pend.pop(email, None)
-    _save_pending(pend)
-    if not pedido:
-        return jsonify(ok=False, erro='pedido não encontrado para este e-mail'), 400
-    proc = subprocess.run(
-        ['python', 'run_scan.py', pedido['tipo'], pedido['alvo'], email,
-         str((data.get('purchase') or {}).get('transaction', 'hotmart'))],
-        capture_output=True, text=True, timeout=600,
-    )
-    if proc.returncode != 0:
-        return jsonify(ok=False, erro='Falha ao gerar relatório',
-                       log=(proc.stderr or '')[-800:]), 500
+    if not EMAIL_RE.match(email):
+        return jsonify(ok=False, erro='e-mail do comprador inválido'), 400
+    import secrets as _secrets
+    codigo = _secrets.token_urlsafe(9)
+    codes = _load_codes()
+    codes[codigo] = {'email': email, 'usado': False,
+                     'ref': str((data.get('purchase') or {}).get('transaction', 'hotmart'))}
+    _save_codes(codes)
+    from send_email import enviar_relatorio as _enviar
+    try:
+        _enviar(email, 'Sua consulta OSINT — código de acesso',
+                f'Obrigado pela compra!\n\nSeu código único: {codigo}\n\n'
+                 f'Acesse {SITE_URL} e informe este código + o alvo '
+                 f'(e-mail, username ou domínio) para receber o relatório.\n'
+                 f'Cada código vale 1 consulta.')
+    except Exception as e:  # noqa: BLE001
+        return jsonify(ok=False, erro=f'compra ok, mas e-mail falhou: {e}'), 500
     return jsonify(ok=True)
 
 
