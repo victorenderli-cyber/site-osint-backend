@@ -53,6 +53,11 @@ def verificar_pagamento_mp(payment_id):
     return (status == 'approved', f'status={status}')
 
 
+@app.get('/health')
+def health():
+    return jsonify(ok=True)
+
+
 @app.get('/api/status')
 def status():
     return jsonify(ok=True, mp_configurado=bool(MP_ACCESS_TOKEN),
