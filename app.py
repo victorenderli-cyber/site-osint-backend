@@ -30,6 +30,16 @@ import requests
 
 app = Flask(__name__)
 
+SITE_ORIGIN = os.environ.get('SITE_ORIGIN', 'https://osint-protege.onrender.com')
+
+
+@app.after_request
+def _cors(resp):
+    resp.headers['Access-Control-Allow-Origin'] = SITE_ORIGIN
+    resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Admin-Token'
+    return resp
+
 MP_ACCESS_TOKEN = os.environ.get('MP_ACCESS_TOKEN', '')
 HOTMART_HOTTOK = os.environ.get('HOTMART_HOTTOK', '')
 HOTMART_CHECKOUT_URL = os.environ.get('HOTMART_CHECKOUT_URL', '')
